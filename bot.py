@@ -1,37 +1,62 @@
+# bot.py  (Aiogram v3)
 import os, asyncio, tempfile, pathlib, re
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message
 from aiogram.filters import Command
 from yt_dlp import YoutubeDL
 
-TOKEN = os.environ.get("BOT_TOKEN")
-if not TOKEN: raise SystemExit("Set BOT_TOKEN env var")
+TOKEN = os.getenv("BOT_TOKEN")
+if not TOKEN:
+    raise SystemExit("❌ BOT_TOKEN غير موجود في المتغيرات.")
 
-bot, dp = Bot(TOKEN), Dispatcher()
+bot = Bot(TOKEN, parse_mode="HTML")
+dp = Dispatcher()
 URL_RX = re.compile(r"https?://\S+")
 
 @dp.message(Command("start"))
-async def hi(m: Message): await m.answer("أرسل رابط فيديو وسأحمله لك (يوتيوب/تيك توك/تويتر/إنستقرام).")
+async def start_cmd(m: Message):
+    await m.answer("✅ أرسل رابط فيديو (يوتيوب/تيك توك/تويتر/إنستغرام…) وسأحمله لك.")
 
 @dp.message(F.text.regexp(URL_RX))
-async def grab(m: Message):
+async def handle_url(m: Message):
     url = URL_RX.search(m.text).group(0)
-    await m.answer("جاري التنزيل…")
+    await m.answer("🔄 جاري التنزيل…")
+
     with tempfile.TemporaryDirectory() as td:
         out = str(pathlib.Path(td) / "%(title).80s.%(ext)s")
-        opts = {"outtmpl": out, "format": "mp4/bestvideo+bestaudio/best",
-                "merge_output_format": "mp4", "noprogress": True, "quiet": True}
-        try:
-            with YoutubeDL(opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                fp = ydl.prepare_filename(info)
-                mp4 = pathlib.Path(fp).with_suffix(".mp4")
-                if mp4.exists(): fp = str(mp4)
-        except Exception as e:
-            return await m.answer(f"فشل التنزيل: {e}")
-        f = pathlib.Path(fp); size_mb = f.stat().st_size/1024/1024
-        if size_mb > 48: await m.answer("الملف كبير على تيليجرام؛ جرّب رابط بدقة أقل.")
-        else: await m.answer_document(open(f, "rb"))
+        is_yt = any(x in url for x in ("youtube.com", "youtu.be"))
 
-async def main(): await dp.start_polling(bot)
-if __name__ == "__main__": asyncio.run(main())
+        ydl_opts = {
+            "outtmpl": out,
+            "format": "mp4/bestvideo+bestaudio/best",
+            "merge_output_format": "mp4",
+            "quiet": True, "noprogress": True,
+            "nocheckcertificate": True,
+            "http_headers": {"Cookie": "CONSENT=YES+1"},
+        }
+        # نستخدم الكوكيز ليوتيوب فقط
+        if is_yt and pathlib.Path("youtube_cookies.txt").exists():
+            ydl_opts["cookiefile"] = "youtube_cookies.txt"
+
+        try:
+            with YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                fpath = ydl.prepare_filename(info)
+                mp4 = pathlib.Path(fpath).with_suffix(".mp4")
+                if mp4.exists():
+                    fpath = str(mp4)
+        except Exception as e:
+            await m.answer(f"❌ فشل التنزيل:\n<code>{e}</code>")
+            return
+
+        f = pathlib.Path(fpath)
+        if f.stat().st_size > 48 * 1024 * 1024:
+            await m.answer("⚠️ الملف كبير لرفعه على تيليجرام. جرّب رابط بدقة أقل.")
+        else:
+            await m.answer_document(open(f, "rb"))
+
+async def main():
+    await dp.start_polling(bot)
+
+if __name__ == "__main__":
+    asyncio.run(main())
