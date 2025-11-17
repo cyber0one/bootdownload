@@ -1,10 +1,13 @@
-# bot.py — robust for YouTube / Instagram / Twitter(X) on Render
+# bot.py — robust for YouTube / Instagram / Twitter(X) / TikTok on Render
 import os, asyncio, tempfile, pathlib, re, math, subprocess
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, FSInputFile
 from aiogram.filters import Command
 from aiogram.client.default import DefaultBotProperties
 from yt_dlp import YoutubeDL
+
+# مجلد السكربت نفسه (عشان نضمن نشوف ملفات الكوكيز صح)
+BASE_DIR = pathlib.Path(__file__).resolve().parent
 
 # ====== Config ======
 TOKEN = os.getenv("BOT_TOKEN")
@@ -44,7 +47,13 @@ def pick_cookiefile(sk: str) -> str | None:
     fn = mapping.get(sk)
     if not fn:
         return None
-    p = pathlib.Path(fn)
+
+    p = BASE_DIR / fn
+
+    # لتيك توك نحب نكون صارمين؛ لو الكوكيز مش موجودة نرفّع خطأ واضح
+    if sk == "tt" and not p.exists():
+        raise FileNotFoundError("tiktok_cookies.txt not found next to bot.py inside the container")
+
     return str(p) if p.exists() else None
 
 def select_format(sk: str, h: int | None) -> str:
@@ -87,9 +96,6 @@ def build_opts(tmpdir: str, sk: str, height: int | None):
     ck = pick_cookiefile(sk)
     if ck:
         opts["cookiefile"] = ck
-
-    # تحسينات صغيرة لبعض المواقع
-    # مثال: تعطيل hls_live_start_index في البث المباشر قد يسبب مشاكل، لذا نتركه افتراضياً
 
     return opts
 
@@ -146,7 +152,7 @@ async def start_cmd(m: Message):
         "أحاول أولاً تنزيل جودة منخفضة تلائم حد تيليجرام، "
         "وإن لزم أضغطه تلقائيًا.\n"
         "ℹ️ لتحسين الاستخراج من IG/X/TikTok ضع ملفات كوكيز: "
-        "instagram_cookies.txt / twitter_cookies.txt / tiktok_cookies.txt في نفس المجلد."
+        "instagram_cookies.txt / twitter_cookies.txt / tiktok_cookies.txt في نفس مجلد bot.py."
     )
 
 @dp.message(F.text.regexp(URL_RX))
