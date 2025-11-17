@@ -29,6 +29,8 @@ def site_key(url: str) -> str:
         return "ig"
     if "twitter.com" in u or "x.com" in u:
         return "tw"
+    if "tiktok.com" in u:
+        return "tt"
     return "other"
 
 def pick_cookiefile(sk: str) -> str | None:
@@ -37,6 +39,7 @@ def pick_cookiefile(sk: str) -> str | None:
         "yt": "youtube_cookies.txt",
         "ig": "instagram_cookies.txt",
         "tw": "twitter_cookies.txt",
+        "tt": "tiktok_cookies.txt",
     }
     fn = mapping.get(sk)
     if not fn:
@@ -49,7 +52,7 @@ def select_format(sk: str, h: int | None) -> str:
     صيغة مرنة:
       - لو h موجود: نجرّب streams <= h ثم fallback إلى best
       - مواقع DASH (يوتيوب غالبًا): bestvideo+bestaudio أولًا
-      - مواقع single-file (IG/Twitter): best[height<=h]/best
+      - مواقع single-file (IG/Twitter/TikTok): best[height<=h]/best
     """
     if h is None:
         # fallback النهائي
@@ -58,8 +61,8 @@ def select_format(sk: str, h: int | None) -> str:
 
     if sk == "yt":
         return f"bv*[height<={h}]+ba/b[height<={h}][ext=mp4]/b[height<={h}]/best"
-    elif sk in ("ig", "tw"):
-        # في تويتر/إنستغرام أحياناً لا توجد مسارات منفصلة للصوت
+    elif sk in ("ig", "tw", "tt"):
+        # في تويتر/إنستغرام/تيك توك غالباً لا توجد مسارات منفصلة للصوت
         return f"best[height<={h}][ext=mp4]/best[height<={h}]/best"
     else:
         # عام
@@ -139,10 +142,11 @@ async def download_with_ladder(url: str, tmpdir: str, sk: str):
 @dp.message(Command("start"))
 async def start_cmd(m: Message):
     await m.answer(
-        "✅ أرسل رابط فيديو (يوتيوب/إنستغرام/تويتر/X…). "
+        "✅ أرسل رابط فيديو (يوتيوب/إنستغرام/تويتر/X/تيك توك…). "
         "أحاول أولاً تنزيل جودة منخفضة تلائم حد تيليجرام، "
         "وإن لزم أضغطه تلقائيًا.\n"
-        "ℹ️ لتحسين الاستخراج من IG/X ضع ملفات كوكيز: instagram_cookies.txt / twitter_cookies.txt في نفس المجلد."
+        "ℹ️ لتحسين الاستخراج من IG/X/TikTok ضع ملفات كوكيز: "
+        "instagram_cookies.txt / twitter_cookies.txt / tiktok_cookies.txt في نفس المجلد."
     )
 
 @dp.message(F.text.regexp(URL_RX))
@@ -177,8 +181,10 @@ async def handle_url(m: Message):
         finally:
             # تنظيف المؤقت
             for p in td_path.glob("*"):
-                try: p.unlink(missing_ok=True)
-                except: pass
+                try:
+                    p.unlink(missing_ok=True)
+                except:
+                    pass
 
 async def main():
     await dp.start_polling(bot)
