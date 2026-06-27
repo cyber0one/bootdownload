@@ -1,4 +1,4 @@
-# bot.py — نسخة محسّنة مع curl_cffi لتيك توك
+# bot.py — نسخة محسّنة مع ImpersonateTarget لتيك توك
 import os
 import asyncio
 import tempfile
@@ -7,6 +7,7 @@ import re
 import time
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
+from yt_dlp.networking.impersonate import ImpersonateTarget
 
 from aiogram import Bot, Dispatcher, F
 from aiogram.types import Message, FSInputFile
@@ -86,9 +87,9 @@ def build_opts(tmpdir: str, sk: str, height: int | None) -> dict:
         "fragment_retries"   : 3,
         "file_access_retries": 3,
     }
-    # ✅ تفعيل impersonation لتيك توك لتجاوز حماية الـ bot detection
+    # ✅ ImpersonateTarget لتجاوز حماية تيك توك
     if sk == "tt":
-        opts["impersonate"] = "chrome"
+        opts["impersonate"] = ImpersonateTarget("chrome")
 
     ck = pick_cookiefile(sk)
     if ck:
