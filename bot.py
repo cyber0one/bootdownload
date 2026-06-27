@@ -1,4 +1,4 @@
-# bot.py — نسخة محسّنة مع إصلاح async + rate limiting + كشف ملفات أفضل
+# bot.py — نسخة محسّنة مع curl_cffi لتيك توك
 import os
 import asyncio
 import tempfile
@@ -61,7 +61,7 @@ def pick_cookiefile(sk: str) -> str | None:
         return None
     p = BASE_DIR / fn
     if sk == "tt" and not p.exists():
-        raise FileNotFoundError("⚠️ tiktok_cookies.txt غير موجود. ضعه في نفس مجلد bot.py.")
+        raise FileNotFoundError("⚠️ tiktok_cookies.txt غير موجود.")
     return str(p) if p.exists() else None
 
 
@@ -86,6 +86,10 @@ def build_opts(tmpdir: str, sk: str, height: int | None) -> dict:
         "fragment_retries"   : 3,
         "file_access_retries": 3,
     }
+    # ✅ تفعيل impersonation لتيك توك لتجاوز حماية الـ bot detection
+    if sk == "tt":
+        opts["impersonate"] = "chrome"
+
     ck = pick_cookiefile(sk)
     if ck:
         opts["cookiefile"] = ck
@@ -196,7 +200,8 @@ async def test_cmd(m: Message) -> None:
     cookie_path = str(BASE_DIR / "tiktok_cookies.txt")
     test_url    = "https://www.tiktok.com/@tiktok/video/7106594312292453675"
     result = subprocess.run(
-        ["yt-dlp", "--cookies", cookie_path, "--get-title", "--no-warnings", test_url],
+        ["yt-dlp", "--cookies", cookie_path, "--impersonate", "chrome",
+         "--get-title", "--no-warnings", test_url],
         capture_output=True, text=True, timeout=30,
     )
     stdout = result.stdout.strip()[:300] or "— لا يوجد —"
@@ -265,14 +270,14 @@ async def handle_url(m: Message) -> None:
             if "TikTok" in err_str and "Unable to extract" in err_str:
                 await status_msg.edit_text(
                     "❌ <b>فشل تيك توك</b>\n\n"
-                    "السبب الأغلب: IP السيرفر محجوب من تيك توك، أو الكوكيز منتهية.\n\n"
-                    "🔧 <b>جرّب:</b>\n"
-                    "• أرسل /test لتشخيص المشكلة\n"
-                    "• جدّد <code>tiktok_cookies.txt</code>\n"
-                    "• أو انتقل لسيرفر بـ IP مختلف"
+                    "جرّب:\n"
+                    "• أرسل /test للتشخيص\n"
+                    "• جدّد tiktok_cookies.txt"
                 )
             else:
-                await status_msg.edit_text(f"❌ <b>فشل التنزيل:</b>\n<code>{err_str[:400]}</code>")
+                await status_msg.edit_text(
+                    f"❌ <b>فشل التنزيل:</b>\n<code>{err_str[:400]}</code>"
+                )
             return
 
         out_path = fpath
@@ -283,7 +288,9 @@ async def handle_url(m: Message) -> None:
             try:
                 out_path = await ffmpeg_compress(out_path, duration, max_h=360)
             except Exception as e:
-                await status_msg.edit_text(f"❌ <b>فشل الضغط:</b>\n<code>{str(e)[:400]}</code>")
+                await status_msg.edit_text(
+                    f"❌ <b>فشل الضغط:</b>\n<code>{str(e)[:400]}</code>"
+                )
                 cleanup_dir(td_path)
                 return
 
@@ -291,8 +298,8 @@ async def handle_url(m: Message) -> None:
 
         if out_path.stat().st_size > TG_LIMIT:
             await status_msg.edit_text(
-                f"⚠️ حجم الفيديو ({final_size_mb:.1f} ميغابايت) لا يزال أكبر من حد تيليجرام.\n"
-                "جرّب رابطاً لمقطع أقصر."
+                f"⚠️ حجم الفيديو ({final_size_mb:.1f} ميغابايت) أكبر من حد تيليجرام.\n"
+                "جرّب مقطعاً أقصر."
             )
             cleanup_dir(td_path)
             return
@@ -313,7 +320,9 @@ async def handle_url(m: Message) -> None:
                 )
                 await status_msg.delete()
             except Exception as e:
-                await status_msg.edit_text(f"❌ <b>فشل الإرسال:</b>\n<code>{str(e)[:400]}</code>")
+                await status_msg.edit_text(
+                    f"❌ <b>فشل الإرسال:</b>\n<code>{str(e)[:400]}</code>"
+                )
         finally:
             cleanup_dir(td_path)
 
