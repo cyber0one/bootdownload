@@ -1,10 +1,11 @@
-# bot.py — نسخة محسّنة مع ImpersonateTarget لتيك توك
+# bot.py — مع TikTok API مباشرة بدل yt-dlp
 import os
 import asyncio
 import tempfile
 import pathlib
 import re
 import time
+import httpx
 from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from yt_dlp.networking.impersonate import ImpersonateTarget
@@ -55,14 +56,11 @@ def pick_cookiefile(sk: str) -> str | None:
         "yt": "youtube_cookies.txt",
         "ig": "instagram_cookies.txt",
         "tw": "twitter_cookies.txt",
-        "tt": "tiktok_cookies.txt",
     }
     fn = mapping.get(sk)
     if not fn:
         return None
     p = BASE_DIR / fn
-    if sk == "tt" and not p.exists():
-        raise FileNotFoundError("⚠️ tiktok_cookies.txt غير موجود.")
     return str(p) if p.exists() else None
 
 
@@ -87,10 +85,6 @@ def build_opts(tmpdir: str, sk: str, height: int | None) -> dict:
         "fragment_retries"   : 3,
         "file_access_retries": 3,
     }
-    # ✅ ImpersonateTarget لتجاوز حماية تيك توك
-    if sk == "tt":
-        opts["impersonate"] = ImpersonateTarget("chrome")
-
     ck = pick_cookiefile(sk)
     if ck:
         opts["cookiefile"] = ck
@@ -102,6 +96,31 @@ def find_largest_file(folder: pathlib.Path) -> pathlib.Path | None:
     if not files:
         return None
     return max(files, key=lambda f: f.stat().st_size)
+
+
+# ✅ تنزيل تيك توك عبر API مباشر بدون yt-dlp
+async def download_tiktok_api(url: str, tmpdir: str) -> tuple[pathlib.Path, float]:
+    api_url = f"https://tikwm.com/api/?url={url}&hd=1"
+    async with httpx.AsyncClient(timeout=30) as client:
+        r = await client.get(api_url)
+        data = r.json()
+
+    if data.get("code") != 0:
+        raise RuntimeError(f"TikTok API فشل: {data.get('msg', 'خطأ غير معروف')}")
+
+    video_info = data["data"]
+    video_url  = video_info.get("hdplay") or video_info.get("play")
+    duration   = float(video_info.get("duration", 0))
+
+    if not video_url:
+        raise RuntimeError("لم يتم العثور على رابط الفيديو")
+
+    async with httpx.AsyncClient(timeout=120) as client:
+        video = await client.get(video_url)
+
+    out = pathlib.Path(tmpdir) / "tiktok_video.mp4"
+    out.write_bytes(video.content)
+    return out, duration
 
 
 def _sync_download(url: str, tmpdir: str, sk: str, height: int | None) -> tuple[pathlib.Path | None, float]:
@@ -194,27 +213,6 @@ def cleanup_dir(folder: pathlib.Path) -> None:
             pass
 
 
-@dp.message(Command("test"))
-async def test_cmd(m: Message) -> None:
-    import subprocess
-    await m.answer("🔍 جاري الاختبار… انتظر.")
-    cookie_path = str(BASE_DIR / "tiktok_cookies.txt")
-    test_url    = "https://www.tiktok.com/@tiktok/video/7106594312292453675"
-    result = subprocess.run(
-        ["yt-dlp", "--cookies", cookie_path, "--impersonate", "chrome",
-         "--get-title", "--no-warnings", test_url],
-        capture_output=True, text=True, timeout=30,
-    )
-    stdout = result.stdout.strip()[:300] or "— لا يوجد —"
-    stderr = result.stderr.strip()[:400] or "— لا يوجد —"
-    status = "✅ نجح!" if result.returncode == 0 else "❌ فشل"
-    await m.answer(
-        f"<b>نتيجة الاختبار: {status}</b>\n\n"
-        f"<b>stdout:</b>\n<code>{stdout}</code>\n\n"
-        f"<b>stderr:</b>\n<code>{stderr}</code>"
-    )
-
-
 @dp.message(Command("start"))
 async def start_cmd(m: Message) -> None:
     await m.answer(
@@ -224,9 +222,7 @@ async def start_cmd(m: Message) -> None:
         "• إنستغرام\n"
         "• تويتر / X\n"
         "• تيك توك\n\n"
-        "سأحاول تنزيله بأنسب جودة تلائم حد تيليجرام (50 ميغابايت)، "
-        "وإن احتجت سأضغطه تلقائياً.\n\n"
-        "⏳ <i>الطلبات الكبيرة تأخذ دقيقة أو أكثر، يُرجى الصبر.</i>"
+        "⏳ <i>الطلبات الكبيرة تأخذ دقيقة أو أكثر.</i>"
     )
 
 
@@ -234,11 +230,9 @@ async def start_cmd(m: Message) -> None:
 async def help_cmd(m: Message) -> None:
     await m.answer(
         "📖 <b>طريقة الاستخدام:</b>\n\n"
-        "فقط أرسل الرابط مباشرةً وسأتكفل بالباقي.\n\n"
-        "<b>ملاحظات:</b>\n"
-        "• حد التيليجرام 50 ميغابايت؛ سيُضغط الفيديو إن تجاوزه.\n"
-        "• إنستغرام وتيك توك قد يحتاجان ملفات كوكيز.\n"
-        "• انتظر 30 ثانية بين كل طلب وآخر."
+        "فقط أرسل الرابط مباشرةً.\n\n"
+        "• حد التيليجرام 50 ميغابايت\n"
+        "• انتظر 30 ثانية بين كل طلب"
     )
 
 
@@ -249,41 +243,33 @@ async def handle_url(m: Message) -> None:
     wait = RATE_LIMIT_SEC - (now - user_last_request[uid])
 
     if wait > 0:
-        await m.answer(f"⏳ الرجاء الانتظار <b>{int(wait)+1}</b> ثانية قبل الطلب التالي.")
+        await m.answer(f"⏳ انتظر <b>{int(wait)+1}</b> ثانية.")
         return
     user_last_request[uid] = now
 
     url = URL_RX.search(m.text).group(0)
     sk  = site_key(url)
 
-    status_msg = await m.answer("🔄 جاري التنزيل… قد يستغرق هذا دقيقة.")
+    status_msg = await m.answer("🔄 جاري التنزيل… قد يستغرق دقيقة.")
 
     with tempfile.TemporaryDirectory() as td:
         td_path = pathlib.Path(td)
 
         try:
-            fpath, duration = await download_with_ladder(url, td, sk)
-        except FileNotFoundError as e:
-            await status_msg.edit_text(f"❌ {e}")
-            return
-        except Exception as e:
-            err_str = str(e)
-            if "TikTok" in err_str and "Unable to extract" in err_str:
-                await status_msg.edit_text(
-                    "❌ <b>فشل تيك توك</b>\n\n"
-                    "جرّب:\n"
-                    "• أرسل /test للتشخيص\n"
-                    "• جدّد tiktok_cookies.txt"
-                )
+            # ✅ تيك توك عبر API مباشر
+            if sk == "tt":
+                fpath, duration = await download_tiktok_api(url, td)
             else:
-                await status_msg.edit_text(
-                    f"❌ <b>فشل التنزيل:</b>\n<code>{err_str[:400]}</code>"
-                )
+                fpath, duration = await download_with_ladder(url, td, sk)
+        except Exception as e:
+            await status_msg.edit_text(
+                f"❌ <b>فشل التنزيل:</b>\n<code>{str(e)[:400]}</code>"
+            )
             return
 
         out_path = fpath
         if out_path.stat().st_size > TG_LIMIT:
-            await status_msg.edit_text("🗜️ الملف كبير… جاري الضغط تلقائياً.")
+            await status_msg.edit_text("🗜️ جاري الضغط…")
             if duration < 1:
                 duration = get_video_duration_ffprobe(out_path)
             try:
@@ -299,8 +285,7 @@ async def handle_url(m: Message) -> None:
 
         if out_path.stat().st_size > TG_LIMIT:
             await status_msg.edit_text(
-                f"⚠️ حجم الفيديو ({final_size_mb:.1f} ميغابايت) أكبر من حد تيليجرام.\n"
-                "جرّب مقطعاً أقصر."
+                f"⚠️ الحجم ({final_size_mb:.1f} MB) أكبر من حد تيليجرام."
             )
             cleanup_dir(td_path)
             return
@@ -309,7 +294,7 @@ async def handle_url(m: Message) -> None:
         try:
             await m.answer_video(
                 FSInputFile(str(out_path)),
-                caption=f"✅ تم التنزيل ({final_size_mb:.1f} MB)",
+                caption=f"✅ تم ({final_size_mb:.1f} MB)",
                 supports_streaming=True,
             )
             await status_msg.delete()
@@ -317,7 +302,7 @@ async def handle_url(m: Message) -> None:
             try:
                 await m.answer_document(
                     FSInputFile(str(out_path)),
-                    caption=f"✅ تم التنزيل ({final_size_mb:.1f} MB)",
+                    caption=f"✅ تم ({final_size_mb:.1f} MB)",
                 )
                 await status_msg.delete()
             except Exception as e:
